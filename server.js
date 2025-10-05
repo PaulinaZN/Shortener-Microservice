@@ -1,6 +1,5 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const dns = require('dns');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -24,118 +23,89 @@ app.use((req, res, next) => {
 const urlDatabase = {};
 let urlCount = 1;
 
-// Ruta raíz simplificada
+// Ruta raíz
 app.get('/', (req, res) => {
   res.json({ message: 'URL Shortener Microservice' });
 });
 
-// Función de validación mejorada
-function validateUrl(originalUrl, callback) {
-  if (!originalUrl || typeof originalUrl !== 'string') {
-    return callback(false);
-  }
-
-  const trimmedUrl = originalUrl.trim();
-  if (trimmedUrl.length === 0) {
-    return callback(false);
-  }
-
-  // Validación de formato básico (como freeCodeCamp espera)
-  const urlRegex = /^(https?:\/\/)?([\w-]+\.)+[\w-]+(\/[\w- .\/?%&=]*)?$/i;
-  if (!urlRegex.test(trimmedUrl)) {
-    return callback(false);
-  }
-
-  let urlToCheck = trimmedUrl;
-  // Si no tiene protocolo, agrega https para el DNS lookup
-  if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
-    urlToCheck = 'https://' + trimmedUrl;
-  }
-
-  let hostname;
+// Función de validación SIMPLIFICADA (como freeCodeCamp espera)
+function isValidUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  
+  const trimmedUrl = url.trim();
+  
+  // Validación básica de formato URL
   try {
-    const parsedUrl = new URL(urlToCheck);
-    hostname = parsedUrl.hostname;
+    const urlObj = new URL(trimmedUrl);
     
-    // Validaciones básicas del hostname
-    if (!hostname || hostname === 'localhost') {
-      return callback(false);
+    // Verificar que tenga protocolo http o https
+    if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+      return false;
     }
-  } catch (err) {
-    return callback(false);
+    
+    // Verificar que tenga hostname
+    if (!urlObj.hostname) {
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    return false;
   }
-
-  // DNS lookup con timeout más corto
-  const timeout = setTimeout(() => {
-    // Si el DNS timeout, igual aceptamos la URL (más permisivo)
-    callback(true, trimmedUrl);
-  }, 2000);
-
-  dns.lookup(hostname, (err, address) => {
-    clearTimeout(timeout);
-    if (err || !address) {
-      console.log('DNS lookup failed for:', hostname);
-      // Aún así aceptamos la URL si el formato es correcto
-      return callback(true, trimmedUrl);
-    }
-    callback(true, trimmedUrl);
-  });
 }
 
-// POST /api/shorturl - CORREGIDO
+// POST /api/shorturl
 app.post('/api/shorturl', (req, res) => {
-  console.log('POST received, body:', req.body); // Debug
-  
-  // Manejar tanto JSON como form-urlencoded
   const originalUrl = req.body.url;
   
-  if (!originalUrl) {
+  console.log('Received URL:', originalUrl); // Debug
+  
+  if (!isValidUrl(originalUrl)) {
+    console.log('URL invalid:', originalUrl);
     return res.json({ error: 'invalid url' });
   }
 
-  validateUrl(originalUrl, (isValid, validatedUrl) => {
-    if (!isValid) {
-      return res.json({ error: 'invalid url' }); // Sin status 400, solo JSON
+  // Buscar si la URL ya existe
+  let existingShort = null;
+  for (const [shortUrl, storedUrl] of Object.entries(urlDatabase)) {
+    if (storedUrl === originalUrl) {
+      existingShort = parseInt(shortUrl);
+      break;
     }
+  }
 
-    // Buscar URL existente
-    let existingShort = null;
-    for (const key in urlDatabase) {
-      if (urlDatabase[key] === validatedUrl) {
-        existingShort = parseInt(key, 10);
-        break;
-      }
-    }
+  if (existingShort !== null) {
+    console.log('URL exists, returning existing short_url:', existingShort);
+    return res.json({ 
+      original_url: originalUrl, 
+      short_url: existingShort 
+    });
+  }
 
-    if (existingShort !== null) {
-      return res.json({ 
-        original_url: validatedUrl, 
-        short_url: existingShort 
-      });
-    }
-
-    // Nueva URL
-    const shortUrl = urlCount;
-    urlDatabase[urlCount] = validatedUrl;
-    
-    const response = { 
-      original_url: validatedUrl, 
-      short_url: shortUrl 
-    };
-    
-    console.log('New URL stored:', response);
-    urlCount++;
-    
-    res.json(response); // Respuesta exacta como freeCodeCamp espera
-  });
+  // Crear nueva URL corta
+  const shortUrl = urlCount;
+  urlDatabase[urlCount] = originalUrl;
+  
+  console.log('New URL stored. Short URL:', shortUrl, 'Original:', originalUrl);
+  
+  const response = { 
+    original_url: originalUrl, 
+    short_url: shortUrl 
+  };
+  
+  urlCount++;
+  res.json(response);
 });
 
-// GET /api/shorturl/:short_url - CORREGIDO
+// GET /api/shorturl/:short_url
 app.get('/api/shorturl/:short_url', (req, res) => {
-  const shortId = parseInt(req.params.short_url, 10);
+  const shortId = parseInt(req.params.short_url);
+  
+  console.log('Redirect request for short_url:', shortId);
   
   if (isNaN(shortId) || shortId < 1 || !urlDatabase[shortId]) {
-    return res.json({ error: 'invalid url' }); // Mismo formato de error
+    console.log('Invalid short_url requested:', shortId);
+    return res.json({ error: 'invalid url' });
   }
 
   const originalUrl = urlDatabase[shortId];
